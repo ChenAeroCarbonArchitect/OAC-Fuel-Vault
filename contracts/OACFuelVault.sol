@@ -44,7 +44,6 @@ contract OACFuelVault is Ownable {
 
     /**
      * @dev Register a new SAF production batch. 
-     * Only the architect (Owner) can onboard verified suppliers initially.
      */
     function registerBatch(
         bytes32 _batchId, 
@@ -57,7 +56,7 @@ contract OACFuelVault is Ownable {
             supplier: _supplier,
             volume: _volume,
             pricePerTon: _price,
-            deliveryDate: block.timestamp + 180 days, // 6 months standard future
+            deliveryDate: block.timestamp + 180 days,
             isVerified: false,
             isSettled: false
         });
@@ -77,10 +76,10 @@ contract OACFuelVault is Ownable {
         uint256 fee = (_amount * PROTOCOL_FEE_BPS) / 10000;
         uint256 netAmount = _amount - fee;
 
-        // 2. Execute wealth capture (Fee to your Treasury immediately)
+        // 2. Execute wealth capture (Fee to treasury)
         require(stablecoin.transferFrom(msg.sender, treasury, fee), "Fee transfer failed");
         
-        // 3. Execute escrow (Net collateral to this Vault contract)
+        // 3. Execute escrow (Net collateral to vault)
         require(stablecoin.transferFrom(msg.sender, address(this), netAmount), "Escrow transfer failed");
 
         totalValueLocked += netAmount;
@@ -94,5 +93,27 @@ contract OACFuelVault is Ownable {
     function setTreasury(address _newTreasury) external onlyOwner {
         require(_newTreasury != address(0), "Invalid address");
         treasury = _newTreasury;
+    }
+
+    /**
+     * @dev Settle the batch and release funds to supplier.
+     * Triggered by OAC-Oracle after physical IoT verification.
+     */
+    function settleBatch(bytes32 _batchId, uint256 _payoutAmount) external onlyOwner {
+        FuelFuture storage batch = futures[_batchId];
+        
+        require(batch.volume > 0, "Batch non-existent");
+        require(!batch.isSettled, "Already settled");
+        require(_payoutAmount <= totalValueLocked, "Insufficient vault balance");
+
+        // Update state before external interaction (Safety First)
+        batch.isVerified = true;
+        batch.isSettled = true;
+        totalValueLocked -= _payoutAmount;
+
+        // Wealth Transfer: Release funds to the supplier
+        require(stablecoin.transfer(batch.supplier, _payoutAmount), "Supplier payout failed");
+
+        emit SettlementTriggered(_batchId, _payoutAmount);
     }
 }
